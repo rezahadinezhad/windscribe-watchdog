@@ -1,0 +1,6 @@
+# Build output (build.ps1)
+bin/
+
+# Activity logs, if you run the exe from the repo folder
+*.log
+*.log.old
