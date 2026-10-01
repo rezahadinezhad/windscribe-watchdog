@@ -53,10 +53,24 @@ is closed). Red: a problem it hasn't been able to fix yet.
 
 ## Install
 
-You need Windows 10 or 11 and Windscribe 2.x (the watchdog uses its `windscribe-cli`). Nothing else: the
-app is built with the C# compiler that ships with Windows.
+You need Windows 10 or 11 and Windscribe 2.x (the watchdog uses its `windscribe-cli`). Nothing else.
 
-Download or clone this repository, then in its folder run:
+### Quick: download the app
+
+1. Download `WindscribeWatchdog.exe` from the
+   [latest release](https://github.com/rezahadinezhad/windscribe-watchdog/releases/latest).
+2. Put it in a folder where it can stay (it keeps its log next to itself), for example
+   `%LOCALAPPDATA%\Programs\WindscribeWatchdog`, and run it.
+3. Windows may say *"Windows protected your PC"*, because the exe isn't code-signed. Click
+   **More info → Run anyway**. (You can check the source and build it yourself instead; see below.)
+
+It adds itself to startup. For the keepalive task that brings it back if it ever stops, use the
+install script below.
+
+### Full: build and install from source
+
+The app is built with the C# compiler that ships with Windows. Download or clone this repository, then
+in its folder run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
