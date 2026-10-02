@@ -210,6 +210,20 @@ namespace WindscribeWatchdog
             public long Position;
             public string Head = "";   // the file's first line; it changes when Windscribe starts a new log
             public int Marker;
+            public DateTime LastConnectStart = DateTime.MinValue;
+        }
+        static readonly TimeSpan ReplacedConnectWindow = TimeSpan.FromSeconds(3);
+
+        // The time at the start of a log line: {"tm": "2026-10-02 18:28:53.120", ...
+        static DateTime LineTime(string line)
+        {
+            int at = line.IndexOf("\"tm\": \"", StringComparison.Ordinal);
+            DateTime time;
+            if (at >= 0 && line.Length >= at + 30 &&
+                DateTime.TryParseExact(line.Substring(at + 7, 23), "yyyy-MM-dd HH:mm:ss.fff",
+                    System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out time))
+                return time;
+            return DateTime.MaxValue; // unknown: treat a Disconnect as yours
         }
         static readonly Dictionary<string, LogScan> scans = new Dictionary<string, LogScan>();
 
@@ -239,9 +253,17 @@ namespace WindscribeWatchdog
                         foreach (string line in Encoding.UTF8.GetString(chunk, 0, end).Split('\n'))
                         {
                             if (line.IndexOf("ConnectionManager::clickDisconnect()", StringComparison.Ordinal) >= 0)
-                                scan.Marker = 1;
-                            else if (line.IndexOf("Connecting to \\\"", StringComparison.Ordinal) >= 0
-                                  || line.IndexOf("onConnectionConnected", StringComparison.Ordinal) >= 0
+                            {
+                                // Windscribe also logs this when a new connect request replaces one in
+                                // progress (it cancels and starts again right away); nobody clicks that fast.
+                                if (LineTime(line) - scan.LastConnectStart > ReplacedConnectWindow) scan.Marker = 1;
+                            }
+                            else if (line.IndexOf("Connecting to \\\"", StringComparison.Ordinal) >= 0)
+                            {
+                                scan.Marker = -1;
+                                scan.LastConnectStart = LineTime(line);
+                            }
+                            else if (line.IndexOf("onConnectionConnected", StringComparison.Ordinal) >= 0
                                   || line.IndexOf("=== Started ===", StringComparison.Ordinal) >= 0)
                                 scan.Marker = -1;
                         }

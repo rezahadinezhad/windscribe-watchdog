@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("Windscribe Watchdog")]
 [assembly: AssemblyProduct("Windscribe Watchdog")]
-[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyVersion("2.2.0.0")]
 
 namespace WindscribeWatchdog
 {

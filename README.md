@@ -24,7 +24,8 @@ mean hours offline before you notice.
 | stops on an error (e.g. 11) | treats it like a drop and reconnects |
 | asks *"Your hosts file is read-only… Fix the issue automatically?"* | answers **Yes**, as you would; Windscribe then fixes the file and reconnects |
 | shows an error notice with only an OK button | dismisses it |
-| fails 4 reconnects in a row, is stuck connecting for 4 minutes, or stops answering for 90 s | restarts the Windscribe app (at most 3 times per 30 minutes) |
+| freezes (stops answering for 90 s) or is stuck connecting for 10 minutes | restarts the Windscribe app (at most 3 times per 30 minutes) |
+| can't reach its own servers ("SSL error" on a filtered network) | keeps the VPN connected with the session Windscribe already has, and tells you |
 | crashes, or its service stops | starts them again |
 
 It also looks after itself: a scheduled task starts it again within 5 minutes if it ever stops, and a

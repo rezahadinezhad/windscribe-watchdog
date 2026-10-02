@@ -34,8 +34,10 @@ namespace WindscribeWatchdog
     //     retrying with growing pauses.
     //   - Windscribe's "Read-Only File" (hosts file) prompt: presses Yes, as you would; Windscribe then
     //     fixes the file itself and reconnects. Error notices with only an OK button: dismisses them.
-    //   - Windscribe not reconnecting after several tries, stuck connecting, or not answering:
-    //     restarts the Windscribe app (at most 3 times per 30 minutes).
+    //   - Windscribe frozen (not answering) or stuck connecting for a long time: restarts the Windscribe
+    //     app (at most 3 times per 30 minutes). Not for reconnects that simply fail: a restarted
+    //     Windscribe has to sign in again, and a filtered network can block that ("SSL error"), which
+    //     would leave the VPN down for longer.
     //   - Windscribe closing unexpectedly, or its service stopping: starts them again.
     // It leaves to you: a Disconnect you press (Windscribe logs "clickDisconnect()" for it), quitting
     // Windscribe yourself, signing in, and any question that would change a Windscribe setting.
@@ -49,8 +51,7 @@ namespace WindscribeWatchdog
         static readonly TimeSpan QuietCheckInterval = TimeSpan.FromSeconds(60);
         const int GraceSeconds = 8;     // lets Windscribe finish what it's doing before stepping in
         static readonly int[] RetryDelaysSec = { 15, 30, 60, 120, 180 };
-        const int AttemptsBeforeRestart = 4;                                 // failed reconnects before restarting the app
-        static readonly TimeSpan StuckLimit = TimeSpan.FromMinutes(4);       // connecting or disconnecting that long
+        static readonly TimeSpan StuckLimit = TimeSpan.FromMinutes(10);      // connecting or disconnecting that long
         static readonly TimeSpan SilentLimit = TimeSpan.FromSeconds(90);     // no usable answer that long
         static readonly TimeSpan RelaunchDelay = TimeSpan.FromSeconds(20);   // after the app closes unexpectedly
         static readonly TimeSpan RestartWindow = TimeSpan.FromMinutes(30);
@@ -67,7 +68,7 @@ namespace WindscribeWatchdog
         // An outage runs from spotting a problem we should fix until the VPN is back.
         DateTime outageSince = DateTime.MinValue;
         DateTime nextAttempt;
-        int attempts, attemptsSinceRestart;
+        int attempts;
         bool acted;              // we did something during this outage, so tell you when it's over
         bool userDisconnected;
         DateTime lastCheck = DateTime.MinValue;
@@ -75,7 +76,7 @@ namespace WindscribeWatchdog
         readonly List<DateTime> restarts = new List<DateTime>();
         readonly HashSet<string> dialogsAnnounced = new HashSet<string>();
         Thread dialogThread;     // UI Automation can hang on a frozen window, so it runs on its own thread
-        bool signedOutAnnounced;
+        bool signedOutAnnounced, loginErrorAnnounced;
         string lastReport, lastNote;
         DateTime lastFullCheck = DateTime.MinValue;
         long logLengthSeen = -1;   // -2: take a fresh baseline at the next quick look
@@ -195,20 +196,32 @@ namespace WindscribeWatchdog
             lastStatus = st;
             if (st.State != VpnState.Connected) connectedSince = DateTime.MinValue;
 
-            if (!st.LoggedIn)
+            if (st.LoginText.StartsWith("Logged out", StringComparison.OrdinalIgnoreCase) ||
+                st.LoginText.StartsWith("Logging out", StringComparison.OrdinalIgnoreCase) || st.LoginText.Length == 0)
             {
                 busySince = DateTime.MinValue;
-                if (st.LoginText.StartsWith("Logged out", StringComparison.OrdinalIgnoreCase))
-                {
-                    Reset();
-                    if (!signedOutAnnounced)
-                        Notify("Windscribe is signed out", "Sign in to Windscribe again; the watchdog can't do that for you.", true);
-                    signedOutAnnounced = true;
-                }
-                string login = st.LoginText.Length > 0 ? st.LoginText : "not signed in";
-                return Show(Health.Idle, "Windscribe: " + login, SlowPollMs, true);
+                Reset();
+                if (!signedOutAnnounced)
+                    Notify("Windscribe is signed out", "Sign in to Windscribe again; the watchdog can't do that for you.", true);
+                signedOutAnnounced = true;
+                return Show(Health.Idle, "Windscribe: " + (st.LoginText.Length > 0 ? st.LoginText : "not signed in"), SlowPollMs, true);
             }
             signedOutAnnounced = false;
+            if (st.LoginText.StartsWith("Logging in", StringComparison.OrdinalIgnoreCase))
+                return Show(Health.Busy, "Windscribe is signing in…", FastPollMs, true);
+            if (!st.LoggedIn)
+            {
+                // Signed in, but Windscribe can't reach its servers right now, e.g. "Error: SSL error" on a
+                // filtered network. The VPN still works with the session it has, so keep looking after it.
+                if (!loginErrorAnnounced)
+                {
+                    Log.Write("Windscribe can't reach its servers (" + st.LoginText + "); still keeping the VPN connected.");
+                    Notify("Windscribe can't reach its servers", "It reports \"" + st.LoginText + "\". The watchdog keeps " +
+                           "reconnecting as usual. If Windscribe asks whether to ignore SSL errors, that's your call.", true);
+                    loginErrorAnnounced = true;
+                }
+            }
+            else loginErrorAnnounced = false;
 
             switch (st.State)
             {
@@ -280,11 +293,7 @@ namespace WindscribeWatchdog
                     : "VPN dropped – reconnecting in " + secs + " s";
                 return Show(Health.Busy, text, Math.Min(FastPollMs, secs * 1000), false);
             }
-            if (attemptsSinceRestart >= AttemptsBeforeRestart && RestartAllowed())
-                return Restart(cli, attemptsSinceRestart + " reconnect attempts in a row failed");
-
             attempts++;
-            attemptsSinceRestart++;
             acted = true;
             Show(Health.Busy, "Reconnecting… (attempt " + attempts + ")", 0, true);
             int exitCode;
@@ -293,7 +302,7 @@ namespace WindscribeWatchdog
             nextAttempt = DateTime.Now.AddSeconds(RetryDelaysSec[Math.Min(attempts, RetryDelaysSec.Length) - 1]);
             if (attempts == 3)
                 Notify("Windscribe won't reconnect yet",
-                       "Tried 3 times. The watchdog keeps retrying, and restarts Windscribe if that doesn't help.", true);
+                       "Tried 3 times. The watchdog keeps retrying every few minutes.", true);
             return 1000; // check the result right away
         }
 
@@ -358,7 +367,6 @@ namespace WindscribeWatchdog
             DateTime now = DateTime.Now;
             restarts.Add(now);
             busySince = silentSince = appGoneSince = DateTime.MinValue;
-            attemptsSinceRestart = 0;
             acted = true;
             if (outageSince == DateTime.MinValue) outageSince = now;
             nextAttempt = now.AddSeconds(30); // Windscribe needs a moment to start and sign in
@@ -442,7 +450,7 @@ namespace WindscribeWatchdog
         void Reset()
         {
             outageSince = DateTime.MinValue;
-            attempts = attemptsSinceRestart = 0;
+            attempts = 0;
             acted = false;
             userDisconnected = false;
         }
